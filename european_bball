@@ -1,0 +1,163 @@
+---
+title: "EuroLeague Basketball"
+author: "Andrew Ross"
+format: html
+---
+
+This week we’re exploring EuroLeague Basketball, the premier men’s club basketball competition in Europe.
+
+The dataset contains information on EuroLeague teams, including their country, home city, arena, seating capacity, and historical performance (Final Four appearances and titles won).
+
+The dataset is curated from publicly available sources such as Wikipedia and official EuroLeague records, and was packaged in the EuroleagueBasketball R package, with documentation available at natanast.github.io/EuroleagueBasketball.
+
+"The EuroLeague is the top-tier European professional basketball club competition, widely regarded as the most prestigious competition in European basketball." — EuroLeague
+
+Some questions you might explore with this dataset:
+
+-   Which countries are most represented in the EuroLeague?
+
+-   How do arena capacities compare across teams and countries? In R, the readr::parse_number() function might be helpful here.
+
+-   Which clubs have been the most successful historically?
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(stringr)
+library(ggpubr)
+library(forcats)
+library(RColorBrewer)
+
+```
+
+```{r}
+data <- read_csv("./euroleague_basketball.csv")
+head(data, 10)
+
+summary(data)
+
+length(unique(data$Team))
+length(unique(data$`Home city`))
+length(unique(data$Arena))
+length(unique(data$Country))
+
+```
+
+# How many unique values are there for the categorical data?
+
+There are 20 teams, 17 home cities, 19 arenas, 11 countries
+
+# Data Issues
+
+Arena: It seems some rows have two Arenas.
+
+Capacity: It seems that some rows have two numbers to them. It looks like it corresponds to two arenas.
+
+Last season: Might just call "(EuroCup)" something else.
+
+Years_of_FinalFour_Appearances might separate them into multiple rows
+
+Years_of_titles_won might separate them into multiple rows
+
+```{r}
+safe_split_keep_missing <- function(x) {
+  ifelse(is.na(x) | x %in% c("NA", "none", "None"), NA, str_split(x, "\\s*,\\s*"))
+}
+
+safe_parse_int <- function(x) {
+  ifelse(is.na(x), NA, as.integer(x))
+}
+
+c_data <- data %>%
+  # Split multiple arenas
+  mutate(Arena = str_split(Arena, "[\\\\,]")) %>%
+  unnest(Arena) %>%
+  mutate(Arena = str_trim(Arena)) %>%
+  
+  # Clean and split capacity
+  mutate(Capacity = str_replace_all(Capacity, ",", "")) %>%
+  mutate(Capacity = str_split(Capacity, "\\s+")) %>%
+  unnest(Capacity) %>%
+  mutate(Capacity = parse_number(Capacity)) %>%
+  
+  # Split Final Four years
+  mutate(Years_of_FinalFour_Appearances = safe_split_keep_missing(Years_of_FinalFour_Appearances)) %>%
+  unnest(Years_of_FinalFour_Appearances) %>%
+  mutate(Years_of_FinalFour_Appearances = parse_integer(Years_of_FinalFour_Appearances)) %>%
+  
+  # Split Titles Won years
+  mutate(Years_of_Titles_Won = safe_split_keep_missing(Years_of_Titles_Won)) %>%
+  unnest(Years_of_Titles_Won) %>%
+  mutate(Years_of_Titles_Won = parse_integer(Years_of_Titles_Won))
+
+```
+
+# Which countries had the most appearances in the final four and champs?
+
+```{r}
+ff <- c_data %>%
+  group_by(Country, Team) %>%
+  summarise(tot = n_distinct(Years_of_FinalFour_Appearances, na.rm = TRUE), .groups = "drop") %>%
+  filter(tot > 0) |>
+  arrange(desc(tot))
+
+champ <- c_data %>%
+  group_by(Country, Team) %>%
+  summarise(tot_won = n_distinct(Years_of_Titles_Won, na.rm = TRUE), .groups = "drop") %>%
+  filter(tot_won > 0) |>
+  arrange(desc(tot_won))
+
+```
+
+# How do arena capacities compare across teams and countries?
+
+```{r}
+
+# Step 1: Collapse to one row per team (as you did)
+c_plot <- c_data |>
+  group_by(Country, Team) |>
+  summarise(
+    Capacity = max(Capacity, na.rm = TRUE),
+    Titles_Won = first(Titles_Won),
+    FinalFour_Appearances = first(FinalFour_Appearances),
+    .groups = "drop"
+  )
+
+# Step 2: Compute total capacity per country (for stacking order)
+country_totals <- c_plot |>
+  group_by(Country) |>
+  summarise(total_capacity = sum(Capacity, na.rm = TRUE), .groups = "drop")
+
+# Step 3: Merge totals back into plot data
+c_plot <- c_plot |>
+  left_join(country_totals, by = "Country")
+
+n_teams <- length(unique(c_plot$Team))
+team_colors <- colorRampPalette(brewer.pal(12, "Paired"))(n_teams)
+
+# Step 4: Plot stacked bars
+ggplot(c_plot, aes(x = reorder(Country, -total_capacity), y = Capacity, fill = Team)) +
+  geom_col(position = "stack", width = 0.8, alpha = 0.8) +
+  geom_text(
+    aes(label = paste0("🏆", Titles_Won, "\nFF ", FinalFour_Appearances)),
+    color = "white",
+    size = 5,
+    fontface = "bold",
+    position = position_stack(vjust = 0.5)
+  ) +
+  labs(
+    title = "European Basketball Arenas: Capacity, Championships 🏆, and Final Four (FF) Appearances by Team",
+    x = NULL, 
+    y = "Number of Seats"
+  ) +
+  scale_y_continuous(breaks = seq(0, 50000, 10000)) +
+  scale_fill_manual(values = team_colors) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank()
+  )
+
+```
