@@ -1,0 +1,433 @@
+---
+title: "Predicting the Price of the Qatar Cars"
+author: Andrew Ross and Torry Rodriguez
+format: 
+  docx:
+    echo: False
+    warning: False
+    message: False
+---
+
+# Introduction
+
+This week we are exploring data about cars in Qatar!
+
+One of the most common example datasets in R is mtcars, which contains data on a 
+bunch of cars from 1974. Some of the car companies in there don't even exist 
+anymore, like Datsun. The mpg dataset that comes with {ggplot2} was designed to 
+be an improvement on mtcars and includes vehicles from 1999 and 2008. However, 
+both mpg and mtcars are highly US-centric---most people in the world don't think 
+in gallons and miles and feet and inches---and neither dataset includes details 
+about electric cars, which are increasingly common today.
+
+Qatar Cars (also available as the {qatarcars} R package) provides a more 
+internationally focused, modern-cars-based demonstration dataset. It mirrors 
+many of the columns in mtcars, but uses (1) non-US-centric makes and models, (2) 
+2025 prices, and (3) metric measurements, making it more appropriate for use as 
+an example dataset outside the United States.
+
+Paul Musgrave and students in his international politics course at Georgetown 
+University in Qatar collected this data in early 2025 with the goal of creating 
+a new toy dataset that does not suffer from "U.S. defaultism":
+
+"U.S. defaultism"---the assumption that American contexts, units, and 
+perspectives are universal---manifests in many ways in political science. In 
+this article, I describe how toy datasets commonly employed in quantitative 
+methods courses exemplify this problem. Using customary units, for instance, is 
+unsuitable for an internationalized higher education system. To address these 
+limitations, I introduce the Qatar Cars dataset, a freely available alternative 
+toy dataset that uses International System (SI) units, reflects current global 
+automotive market trends (such as the rise of Chinese manufacturers and electric 
+vehicles), and avoids ethnocentric classifications such as labeling the non-U.S. 
+world "foreign." Created through collaborative data collection with students, 
+the Qatar Cars dataset maintains the pedagogical advantages of earlier datasets, 
+improves statistical instruction by removing barriers for international 
+audiences, and provides opportunities to discuss data-generating processes and 
+research ethics.1
+
+The price column is stored as Qatari Riyals (QAR). At the time of data 
+collection in January 2025, the exchange rates between QAR and US Dollars and 
+Euros were: 1 USD = 3.64 QAR and 1 EUR = 4.15 QAR.
+
+I'm a Bayesian statistician at heart.  Anytime I can implement a Bayesian
+model, I will.  We have random effects, which most machine learning models can't
+capture the variability like this model can.
+
+```{r}
+library(tidyverse)
+library(brms)
+```
+
+# Exploratory Data Analysis
+
+The only data cleaning that was done was removing 10 rows do to NA values in the 
+variable economy.
+
+```{r}
+data <- read_csv("./qatarcars.csv") |>
+  drop_na()
+
+#data = data |> mutate(volume = length * width * height)
+
+#data |> select(model) |> group_by(model) |> tally() |> arrange(desc(n)) |> print(n = 95)
+
+```
+
+Figure 1 shows the distribution of the log transformation of price.  We
+can see the distribution is still right skewed.  This indicates a gamma model
+with a log link could be an appropriate model.
+
+```{r}
+#| label: fig-1
+#| fig-width: 6
+#| fig-align: center
+#| fig-cap: "Distribution of the log tranformation of price."
+
+ggplot(data, aes(x = log(price))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Distribution of Log Price", x = "")
+
+```
+
+
+```{r}
+#| eval: false
+#| label: fig-2
+#| fig-width: 6
+#| fig-align: center
+#| fig-cap: ""
+
+ggplot(data, aes(x = length)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Distribution of Length", x = "")
+
+```
+
+
+
+```{r}
+#| eval: false
+ggplot(data, aes(x = length, y = log(price))) +
+  geom_smooth() +
+  geom_point() +
+  labs(title = "Log Price vs Length", x = "", y = "")
+
+```
+
+
+```{r}
+#| eval: false
+ggplot(data, aes(x = seating, y = log(price))) +
+  geom_smooth() +
+  geom_point() +
+  labs(title = "Log Price vs seating", x = "", y = "")
+
+```
+
+```{r}
+#| label: fig-3
+#| fig-width: 6
+#| fig-align: center
+#| fig-cap: "Relationship between the log transformation of price and horsepower."
+
+ggplot(data, aes(x = horsepower, y = log(price))) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x + I(x^2)
+  ) +
+  geom_point() +
+  labs(
+    title = "Log Price vs Horsepower",
+    x = "Horsepower",
+    y = "Log Price"
+  )
+
+
+```
+
+```{r}
+#| eval: false
+
+
+
+ggplot(data, aes(x = volume, y = log(price))) + 
+    geom_point() +
+    geom_smooth(method = 'lm', formula = y ~ splines::bs(x, 3))
+
+```
+
+```{r}
+#| label: fig-4
+#| fig-width: 6
+#| fig-align: center
+#| fig-cap: "Pearson correlation between numeric variables."
+data_numeric <- data %>% select(where(is.numeric))
+
+cor_matrix <- cor(data_numeric)
+
+corrplot::corrplot(cor_matrix)
+
+```
+
+# Gamma Model using a Log Link and the brms Package
+
+```{r}
+
+model <- brm(
+  formula = price ~ scale(horsepower) + I(scale(horsepower)^2)  +  (1|seating) + (1|origin:make:model), #+ seating + I(seating^2),
+  data = data,
+  family = Gamma(link = "log"),
+  prior = c(
+    prior(normal(0, 10), class = "Intercept"),
+    prior(normal(0, 10), class = "b", coef = "scalehorsepower"),
+    prior(normal(0, 10), class = "b", coef = "IscalehorsepowerE2"),
+    prior(inv_gamma(2,1), class = 'sd', group =  'origin:make:model'),
+    prior(inv_gamma(2,1), class = 'sd', coef = 'Intercept', group =  'origin:make:model'),
+    prior(inv_gamma(2,1), class = 'sd', coef = 'Intercept', group =  'seating'),
+    prior(inv_gamma(2,1), class = 'sd', group =  'seating'),
+    prior(inv_gamma(2, 1), class = "shape")
+  ),
+  init = 0,
+  iter = 4000,
+  warmup = 2000,
+  control = list(adapt_delta = 0.99, max_treedepth = 12),
+  chains = 2,
+  cores = 2
+)
+
+
+```
+
+# Results
+
+```{r}
+
+summary(model)
+
+```
+
+We estimated a gamma regression model with a log link to explain vehicle price 
+as a function of horsepower (standardized), its quadratic term, and two 
+random‐effect structures: seating configuration and origin–make–model. The model 
+used 95 observations and was fit with NUTS sampling (4,000 post-warmup draws). 
+All parameters show good convergence (R̂ ≈ 1; high ESS).
+
+
+## Fixed Effects
+
+### Intercept (12.22; 95% CI: 11.92–12.51) 
+This represents the expected log-price at average horsepower.
+
+### Horsepower (linear term): 1.41 (95% CI: 1.27–1.56) 
+A strong positive association.  Meaning, vehicles with higher standardized 
+horsepower have substantially higher prices.
+
+### Horsepower²: –0.10 (95% CI: –0.14 to –0.06) 
+A negative quadratic term indicates diminishing marginal increases in price at 
+high horsepower levels. Price increases with horsepower but at a decreasing rate.
+
+## Random Effects
+
+### Origin–make–model grouping (95 levels): 
+sd(intercept) = 0.26 (95% CI: 0.15–0.36)
+
+Substantial variability in baseline price across specific vehicle identities.
+
+### Seating configuration (5 levels): 
+sd(intercept) = 0.26 (95% CI: 0.11–0.59)
+
+Moderate heterogeneity in base price across seating groups.
+
+These random-effects magnitudes indicate that both the specific model identity 
+and the seating category meaningfully influence baseline prices, even after 
+accounting for horsepower.
+
+### Shape Parameter
+
+Shape = 20.96 (95% CI: 7.91–72.48)
+
+Indicates moderately low dispersion consistent with a gamma-distributed outcome.
+
+
+
+# Discussion
+
+Overall, the model suggests that horsepower is a strong and statistically 
+credible predictor of price, with diminishing returns. Vehicle identity 
+(origin–make–model) and seating capacity contribute independent 
+intercept variation, capturing differences in baseline pricing structures.
+
+We tried an elastic net model to incorporate more predictors and penalize them
+as well as a random forest model.  Both models performed worse with the mean 
+absolute error metric.
+
+# Appendix
+
+```{r}
+#| label: fig-5
+#| fig-width: 8
+#| fig-height: 8
+#| fig-align: center
+#| fig-cap: "Convergence plots of the parameters"
+
+plot(model)
+
+```
+
+
+```{r}
+#| label: fig-6
+#| fig-width: 8
+#| fig-align: center
+#| fig-cap: "Posterior probability plots of price.  This shows how well the model performs. If the replicated y samples mimin y, then we have a good fit for predictions."
+
+pp_check(model, type = 'dens', ndraws = 10)
+```
+
+
+```{r}
+#| eval: false
+
+pred = as.data.frame(predict(model))
+
+mean(abs(log(data$price) - log(pred$Estimate)))
+```
+
+
+```{r}
+#| eval: false
+library(tidymodels)
+library(vip)
+```
+
+```{r}
+#| eval: false
+set.seed(123)
+
+data$model_clean <- janitor::make_clean_names(data$model)
+
+cv = vfold_cv(data, v = 5)
+
+grid = expand_grid(mixture = seq(0.1, 1, 0.1), penalty = seq(0.1, 1, 0.1))
+
+```
+
+```{r}
+#| eval: false
+
+rec = recipe(price ~ ., data = data) |>
+  step_log(price) |>
+  step_scale(all_numeric_predictors()) |>
+  step_novel(all_nominal_predictors()) |>
+  step_rm(model) |>
+  step_dummy(all_nominal_predictors())
+
+
+```
+
+
+```{r}
+#| eval: false
+
+elastic_spec = linear_reg(mixture = tune(), penalty = tune()) |> 
+  set_mode('regression') |>
+  set_engine('glmnet')
+
+```
+
+
+```{r}
+#| eval: false
+price_wkf = workflow() |>
+  add_recipe(rec) |>
+  add_model(elastic_spec)
+
+```
+
+
+```{r}
+#| eval: false
+
+lr_res = price_wkf |>
+  tune_grid(cv, 
+    grid = grid, 
+    control = control_grid(save_pred = T), 
+    metrics = metric_set(mae))
+
+```
+
+
+```{r}
+#| eval: false
+lr_plot <- 
+  lr_res %>% 
+  collect_metrics() %>% 
+  ggplot(aes(x = penalty, y = mean)) + 
+  geom_point() + 
+  geom_line() + 
+  ylab("Mean Absolute Error") +
+  scale_x_log10(labels = scales::label_number())
+
+lr_plot 
+
+```
+
+```{r}
+#| eval: false
+lr_res |> show_best()
+```
+
+```{r}
+#| eval: false
+lr_res %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 20)
+```
+
+
+
+```{r}
+#| eval: false
+
+grid = expand_grid(mtry = seq(20, 50, 1), min_n = seq(1, 5, 1))
+
+
+rf_spec = rand_forest(trees = 1000, mtry = tune(), min_n = tune()) |> 
+  set_mode('regression') |>
+  set_engine('ranger')
+
+```
+
+
+```{r}
+#| eval: false
+price_wkf = workflow() |>
+  add_recipe(rec) |>
+  add_model(rf_spec)
+
+```
+
+
+```{r}
+#| eval: false
+
+lr_res = price_wkf |>
+  tune_grid(cv, 
+    grid = grid, 
+    control = control_grid(save_pred = T), 
+    metrics = metric_set(mae))
+
+```
+
+
+```{r}
+#| eval: false
+lr_res |> show_best()
+```
+
+```{r}
+#| eval: false
+lr_res %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 20)
+```
