@@ -1,0 +1,144 @@
+---
+title: "Tidy Tuesday"
+author: "Andrew Ross"
+format: html
+execute: 
+  include: false
+  echo: false
+  warning: false
+engine: julia
+---
+
+
+```{julia}
+
+begin
+    using TidierTuesday
+    using DataFrames
+    import CSV: read
+    using StatsPlots
+    using RCall
+    using Durbyn
+end
+
+begin
+    df = tt_load("2026-03-31")
+
+    temp = df[1]
+    ture = df[2]
+end
+
+```
+
+```{julia}
+
+# --- EDA --- #
+
+sensor_2 = temp[temp.sensor_depth_at_low_tide_m .== 2, :]
+
+StatsPlots.plot(
+    sensor_2.date, 
+    log.(sensor_2.mean_temperature_degree_c))
+
+```
+
+```{julia}
+#| eval: false
+
+@rput temp
+R"""
+library(tidyverse)
+temp |> ggplot(
+    mapping = aes(
+        x = date, 
+        mean_temperature_degree_c, 
+        group = as.factor(sensor_depth_at_low_tide_m),
+        color = as.factor(sensor_depth_at_low_tide_m))) + 
+    geom_line() +
+    labs(
+        x = NULL, 
+        y = "Mean Temperature (in Celsius)", 
+        color = "Sensor Depth",
+        "Different Sensor Depths over Time") 
+
+ggsave("./tt_plot.pdf")
+
+"""
+
+```
+
+```{julia}
+
+@rput temp
+R"""
+library(tidyverse)
+temp |> ggplot(
+    mapping = aes(
+        x = date, 
+        mean_temperature_degree_c)) + 
+    geom_line() +
+    labs(
+        x = NULL, 
+        y = "Mean Temperature (in Celsius)", 
+        title = "Are the patterns for each Sensor Depth Different?"
+    ) +
+    facet_wrap(~sensor_depth_at_low_tide_m)
+
+ggsave("./tt_plot2.pdf")
+
+"""
+
+```
+
+```{julia}
+
+temp.log_mean_temp = log.(temp.mean_temperature_degree_c)
+
+sensors = unique(temp.sensor_depth_at_low_tide_m)
+
+# --- Time Series Models --- #
+
+fcs = []
+
+for s in unique(temp.sensor_depth_at_low_tide_m)
+
+    tmp_temp = temp[temp.sensor_depth_at_low_tide_m .== s, :]
+
+    rows = nrow(tmp_temp) - 100
+
+    temp_train = tmp_temp[1:rows, :]
+
+    temp_test = tmp_temp[(rows+1):end, :]
+
+    ar_mod = auto_arima(temp_train.log_mean_temp, 12)
+
+    fc = Durbyn.forecast(ar_mod, h = 20)
+    push!(fcs, fc)
+
+end
+
+```
+
+
+```{julia}
+#| include: true
+
+plt_list = []
+for p in 1:length(sensors)
+    sens = sensors[p]
+    println("Sensor Depth = $sens")
+    println(fcs[p].method)
+    p_temp= Durbyn.plot(fcs[p])
+    title!("Sensor Depth: $sens")
+
+    push!(plt_list, p_temp)
+end
+
+Plots.plot(
+    plt_list..., 
+    size = (1500, 800), 
+    legend = false
+)
+
+savefig("plot2.pdf")
+```
